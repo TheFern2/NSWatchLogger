@@ -4,6 +4,10 @@ A lightweight log relay that routes watchOS log messages to an iPhone companion 
 
 No external dependencies. Pure Swift.
 
+## Using with NSLogger
+
+![](./docs/images/nslogger.png)
+
 ## Products
 
 - **NSWatchLogger** — import on watchOS. Logger enum + transport protocol.
