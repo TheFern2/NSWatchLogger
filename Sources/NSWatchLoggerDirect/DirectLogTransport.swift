@@ -144,17 +144,44 @@ public final class DirectLogTransport: NSObject, WatchLogTransport, @unchecked S
         disc.onServiceFound = { [weak self] endpoint in
             guard let self else { return }
             self.discovery?.stop()
-            switch self.mode {
-            case .http:
-                if case .service(let name, let type, let domain, _) = endpoint {
-                    let host = "\(name).\(type)\(domain)"
-                    self.httpSender?.connect(host: host, port: port)
-                }
-            case .webSocket:
-                self.wsSender?.connectToEndpoint(endpoint)
-            }
+            self.resolveAndConnect(endpoint: endpoint, port: port)
         }
         disc.start()
         self.discovery = disc
+    }
+
+    private func resolveAndConnect(endpoint: NWEndpoint, port: UInt16) {
+        connectionStatus = .connecting
+        let resolver = NWConnection(to: endpoint, using: .tcp)
+        resolver.stateUpdateHandler = { [weak self] state in
+            guard let self else { return }
+            switch state {
+            case .ready:
+                defer { resolver.cancel() }
+                guard let resolved = resolver.currentPath?.remoteEndpoint,
+                      case .hostPort(let host, _) = resolved else {
+                    self.connectionStatus = .disconnected
+                    return
+                }
+                let hostString = "\(host)"
+                switch self.mode {
+                case .http:
+                    var httpHost = hostString
+                    if hostString.contains(":") {
+                        httpHost = "[\(hostString)]"
+                    }
+                    self.httpSender?.connect(host: httpHost, port: port)
+                case .webSocket:
+                    let wsPort = port + BonjourConstants.wsPortOffset
+                    self.wsSender?.connect(host: hostString, port: wsPort)
+                }
+            case .failed:
+                resolver.cancel()
+                self.connectionStatus = .disconnected
+            default:
+                break
+            }
+        }
+        resolver.start(queue: DispatchQueue(label: "com.nswatchlogger.resolver"))
     }
 }

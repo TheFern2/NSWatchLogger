@@ -165,6 +165,34 @@ Custom: `.custom("yourTag")`
 
 `.debug`, `.info`, `.warning`, `.error`
 
+## LogServerCLI
+
+A headless log server you can run from the terminal. Listens for incoming logs over HTTP and WebSocket, advertises via Bonjour, and prints entries to stdout. Useful for scripting, CI, or when you don't need the full macOS viewer.
+
+```bash
+# Build and run
+swift run LogServerCLI
+```
+
+```
+LogServer running
+  HTTP:       http://localhost:9830/log
+  HTTP batch: http://localhost:9830/logs
+  WebSocket:  ws://localhost:9831
+  Bonjour:    advertising as _watchlog._tcp
+
+Press Ctrl+C to stop
+```
+
+Output format:
+
+```
+[2026-05-22T01:30:00Z] [network] [debug] GET /api/health 200
+[2026-05-22T01:30:01Z] [workout] [info] Session started
+```
+
+The Watch discovers it automatically via Bonjour, same as the macOS viewer app.
+
 ## Thread Safety
 
 `WatchLogger`, `WatchLogRelay`, `DirectLogTransport`, and `LogServer` use `NSLock` to guard mutable state. Safe to call from any thread.
