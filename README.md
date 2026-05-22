@@ -38,7 +38,7 @@ watchOS App        WCSession       iOS App          sink
 
 ## Direct Transport (HTTP/WebSocket)
 
-The recommended path for development. Logs go straight from the Watch to the macOS viewer over the local network, no iPhone needed.
+Sends logs straight from the Watch to the macOS viewer over the local network. No iPhone needed. Best when the Watch and Mac are on the same network.
 
 ### Watch Side
 
@@ -81,9 +81,9 @@ transport.onConnectionStatusChanged = { status in
 
 Both modes use Bonjour (`_watchlog._tcp`) to auto-discover the viewer on the local network.
 
-## WatchConnectivity Relay (Legacy)
+## WatchConnectivity Relay
 
-Routes logs through the paired iPhone using WCSession. Useful when the Watch and Mac are not on the same network.
+Routes logs through the paired iPhone using WCSession. The natural choice when your app already has a companion iOS app, and lets you pipe logs into NSLogger, os_log, or any logging backend on the phone. Also works when the Watch and Mac are not on the same network.
 
 ### Watch Side
 
