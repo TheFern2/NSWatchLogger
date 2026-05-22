@@ -34,6 +34,7 @@ public struct LogEntry: Codable, Identifiable, Sendable, Hashable, Comparable {
 
 public enum LogEntryLevel: String, Codable, CaseIterable, Sendable {
     case debug
+    case info
     case warning
     case error
     case unknown
