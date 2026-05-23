@@ -2,9 +2,9 @@ import Foundation
 import Network
 import NSWatchLoggerModels
 
-final class WebSocketLogSender: @unchecked Sendable {
+final class WebSocketLogSender: NSObject, @unchecked Sendable {
     private let lock = NSLock()
-    private var connection: NWConnection?
+    private var webSocketTask: URLSessionWebSocketTask?
     private let queue: LogQueue
     private let networkQueue = DispatchQueue(label: "com.nswatchlogger.websocket")
     private var host: String?
@@ -15,10 +15,15 @@ final class WebSocketLogSender: @unchecked Sendable {
     private let heartbeatInterval: TimeInterval = 15
     private var intentionalDisconnect = false
 
+    private lazy var session: URLSession = {
+        URLSession(configuration: .default, delegate: self, delegateQueue: nil)
+    }()
+
     var onStatusChanged: ((ConnectionStatus) -> Void)?
 
     init(queue: LogQueue) {
         self.queue = queue
+        super.init()
     }
 
     func connect(host: String, port: UInt16) {
@@ -36,98 +41,95 @@ final class WebSocketLogSender: @unchecked Sendable {
         self.intentionalDisconnect = false
         lock.unlock()
 
-        let ws = NWProtocolWebSocket.Options()
+        onStatusChanged?(.connecting)
         let params = NWParameters.tcp
-        params.defaultProtocolStack.applicationProtocols.insert(ws, at: 0)
-
-        let conn = NWConnection(to: endpoint, using: params)
-        startConnection(conn)
+        let resolver = NWConnection(to: endpoint, using: params)
+        resolver.stateUpdateHandler = { [weak self] state in
+            switch state {
+            case .ready:
+                if let resolved = resolver.currentPath?.remoteEndpoint,
+                   case .hostPort(let host, let port) = resolved {
+                    resolver.cancel()
+                    self?.connect(host: "\(host)", port: port.rawValue)
+                } else {
+                    resolver.cancel()
+                    self?.onStatusChanged?(.disconnected)
+                }
+            case .failed:
+                resolver.cancel()
+                self?.onStatusChanged?(.disconnected)
+            default:
+                break
+            }
+        }
+        resolver.start(queue: networkQueue)
     }
 
     func send(_ entry: LogEntry) {
-        guard let data = try? LogEntry.jsonEncoder.encode(entry) else { return }
+        guard let data = try? LogEntry.jsonEncoder.encode(entry),
+              let text = String(data: data, encoding: .utf8) else { return }
 
         lock.lock()
-        let conn = connection
+        let task = webSocketTask
         lock.unlock()
 
-        guard let conn, conn.state == .ready else {
+        guard let task, task.state == .running else {
             queue.enqueue(entry)
             return
         }
 
-        let metadata = NWProtocolWebSocket.Metadata(opcode: .text)
-        let context = NWConnection.ContentContext(
-            identifier: "logEntry",
-            metadata: [metadata]
-        )
-
-        conn.send(content: data, contentContext: context, isComplete: true, completion: .contentProcessed { [weak self] error in
+        task.send(.string(text)) { [weak self] error in
             if error != nil {
                 self?.queue.enqueue(entry)
             }
-        })
+        }
     }
 
     func disconnect() {
         lock.lock()
         intentionalDisconnect = true
-        let conn = connection
-        connection = nil
+        let task = webSocketTask
+        webSocketTask = nil
         lock.unlock()
 
         stopHeartbeat()
-        conn?.cancel()
+        task?.cancel(with: .goingAway, reason: nil)
         onStatusChanged?(.disconnected)
     }
 
     private func establishConnection(host: String, port: UInt16) {
-        let ws = NWProtocolWebSocket.Options()
-        let params = NWParameters.tcp
-        params.defaultProtocolStack.applicationProtocols.insert(ws, at: 0)
+        var urlHost = host
+        if host.contains(":") {
+            urlHost = "[\(host)]"
+        }
+        guard let url = URL(string: "ws://\(urlHost):\(port)") else {
+            onStatusChanged?(.disconnected)
+            return
+        }
 
-        let nwHost = NWEndpoint.Host(host)
-        let nwPort = NWEndpoint.Port(rawValue: port)!
-        let conn = NWConnection(host: nwHost, port: nwPort, using: params)
-        startConnection(conn)
-    }
+        let task = session.webSocketTask(with: url)
 
-    private func startConnection(_ conn: NWConnection) {
         lock.lock()
-        connection?.cancel()
-        connection = conn
+        webSocketTask?.cancel(with: .goingAway, reason: nil)
+        webSocketTask = task
         lock.unlock()
 
         onStatusChanged?(.connecting)
-
-        conn.stateUpdateHandler = { [weak self] state in
-            guard let self else { return }
-            switch state {
-            case .ready:
-                self.lock.lock()
-                self.reconnectAttempt = 0
-                self.lock.unlock()
-                self.onStatusChanged?(.connected)
-                self.startHeartbeat()
-                self.flushQueue()
-                self.receiveLoop(conn)
-            case .failed:
-                self.handleDisconnect()
-            case .waiting:
-                self.onStatusChanged?(.reconnecting)
-            default:
-                break
-            }
-        }
-
-        conn.start(queue: networkQueue)
+        task.resume()
     }
 
-    private func receiveLoop(_ conn: NWConnection) {
-        conn.receiveMessage { [weak self] _, _, _, error in
+    private func receiveLoop() {
+        lock.lock()
+        let task = webSocketTask
+        lock.unlock()
+
+        task?.receive { [weak self] result in
             guard let self else { return }
-            if error == nil {
-                self.receiveLoop(conn)
+            switch result {
+            case .success:
+                self.receiveLoop()
+            case .failure:
+                self.handleDisconnect()
             }
         }
     }
@@ -140,15 +142,20 @@ final class WebSocketLogSender: @unchecked Sendable {
     }
 
     private func handleDisconnect() {
-        stopHeartbeat()
-
         lock.lock()
+        guard webSocketTask != nil else {
+            lock.unlock()
+            return
+        }
+        webSocketTask = nil
         let shouldReconnect = !intentionalDisconnect
         let host = self.host
         let port = self.port
         reconnectAttempt += 1
         let attempt = reconnectAttempt
         lock.unlock()
+
+        stopHeartbeat()
 
         guard shouldReconnect, let host else {
             onStatusChanged?(.disconnected)
@@ -187,17 +194,49 @@ final class WebSocketLogSender: @unchecked Sendable {
 
     private func sendPing() {
         lock.lock()
-        let conn = connection
+        let task = webSocketTask
         lock.unlock()
 
-        guard let conn, conn.state == .ready else { return }
+        task?.sendPing { [weak self] error in
+            if error != nil {
+                self?.handleDisconnect()
+            }
+        }
+    }
+}
 
-        let metadata = NWProtocolWebSocket.Metadata(opcode: .ping)
-        metadata.setPongHandler(networkQueue) { _ in }
-        let context = NWConnection.ContentContext(
-            identifier: "ping",
-            metadata: [metadata]
-        )
-        conn.send(content: nil, contentContext: context, isComplete: true, completion: .contentProcessed { _ in })
+extension WebSocketLogSender: URLSessionWebSocketDelegate {
+    func urlSession(
+        _ session: URLSession,
+        webSocketTask: URLSessionWebSocketTask,
+        didOpenWithProtocol protocol: String?
+    ) {
+        lock.lock()
+        reconnectAttempt = 0
+        lock.unlock()
+
+        onStatusChanged?(.connected)
+        startHeartbeat()
+        flushQueue()
+        receiveLoop()
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        webSocketTask: URLSessionWebSocketTask,
+        didCloseWith closeCode: URLSessionWebSocketTask.CloseCode,
+        reason: Data?
+    ) {
+        handleDisconnect()
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didCompleteWithError error: (any Error)?
+    ) {
+        if error != nil {
+            handleDisconnect()
+        }
     }
 }

@@ -10,7 +10,7 @@ final class HTTPLogSender: @unchecked Sendable {
     private var flushTimer: DispatchSourceTimer?
     private let timerQueue = DispatchQueue(label: "com.nswatchlogger.http-flush")
     private let batchSize = 10
-    private let flushInterval: TimeInterval = 1.0
+    private let flushInterval: TimeInterval = 0.1
 
     var onStatusChanged: ((ConnectionStatus) -> Void)?
 
