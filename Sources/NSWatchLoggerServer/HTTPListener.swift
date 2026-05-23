@@ -51,8 +51,7 @@ final class HTTPListener: @unchecked Sendable {
         let endpoint = describeEndpoint(connection.endpoint)
         let client = ClientConnection(
             id: clientID,
-            remoteEndpoint: endpoint,
-            transportType: .http
+            remoteEndpoint: endpoint
         )
         onClientConnected?(client)
 

@@ -13,11 +13,9 @@ let port: UInt16 = 9830
 server.start(port: port)
 
 print("LogServer running")
-print("  HTTP:      http://localhost:\(port)\(BonjourConstants.httpPathLog)")
+print("  HTTP:       http://localhost:\(port)\(BonjourConstants.httpPathLog)")
 print("  HTTP batch: http://localhost:\(port)\(BonjourConstants.httpPathBatch)")
-print("  WebSocket: ws://localhost:\(port + BonjourConstants.wsPortOffset)")
-print("  TCP:       localhost:\(port + BonjourConstants.tcpPortOffset)")
-print("  Bonjour:   advertising as \(BonjourConstants.serviceType)")
+print("  Bonjour:    advertising as \(BonjourConstants.serviceType)")
 print("")
 print("Press Ctrl+C to stop")
 
