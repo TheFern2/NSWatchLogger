@@ -6,13 +6,15 @@ final class BonjourAdvertiser: @unchecked Sendable {
     private let lock = NSLock()
     private var httpListener: NWListener?
     private var wsListener: NWListener?
+    private var tcpListener: NWListener?
 
     var onStateChanged: ((Bool) -> Void)?
 
-    func advertise(httpListener: NWListener, wsListener: NWListener) {
+    func advertise(httpListener: NWListener, wsListener: NWListener, tcpListener: NWListener) {
         lock.lock()
         self.httpListener = httpListener
         self.wsListener = wsListener
+        self.tcpListener = tcpListener
         lock.unlock()
 
         var httpTXT = NWTXTRecord()
@@ -29,6 +31,13 @@ final class BonjourAdvertiser: @unchecked Sendable {
             txtRecord: wsTXT
         )
 
+        var tcpTXT = NWTXTRecord()
+        tcpTXT[TXTKey.transport] = "tcp"
+        tcpListener.service = NWListener.Service(
+            type: BonjourConstants.serviceType,
+            txtRecord: tcpTXT
+        )
+
         onStateChanged?(true)
     }
 
@@ -36,8 +45,10 @@ final class BonjourAdvertiser: @unchecked Sendable {
         lock.lock()
         httpListener?.service = nil
         wsListener?.service = nil
+        tcpListener?.service = nil
         httpListener = nil
         wsListener = nil
+        tcpListener = nil
         lock.unlock()
 
         onStateChanged?(false)

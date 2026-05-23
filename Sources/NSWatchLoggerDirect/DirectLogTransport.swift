@@ -9,6 +9,7 @@ import WatchKit
 public enum TransportMode: Sendable {
     case http
     case webSocket
+    case tcp
 }
 
 public final class DirectLogTransport: NSObject, WatchLogTransport, @unchecked Sendable {
@@ -20,6 +21,7 @@ public final class DirectLogTransport: NSObject, WatchLogTransport, @unchecked S
 
     private var httpSender: HTTPLogSender?
     private var wsSender: WebSocketLogSender?
+    private var tcpSender: NWTCPLogSender?
     private var discovery: BonjourDiscovery?
     private var _connectionStatus: ConnectionStatus = .disconnected
     private var statusHandler: ((ConnectionStatus) -> Void)?
@@ -78,6 +80,12 @@ public final class DirectLogTransport: NSObject, WatchLogTransport, @unchecked S
                 self?.connectionStatus = status
             }
             self.wsSender = sender
+        case .tcp:
+            let sender = NWTCPLogSender(queue: queue)
+            sender.onStatusChanged = { [weak self] status in
+                self?.connectionStatus = status
+            }
+            self.tcpSender = sender
         }
 
         if let host {
@@ -115,6 +123,8 @@ public final class DirectLogTransport: NSObject, WatchLogTransport, @unchecked S
             httpSender?.send(entry)
         case .webSocket:
             wsSender?.send(entry)
+        case .tcp:
+            tcpSender?.send(entry)
         }
     }
 
@@ -124,6 +134,7 @@ public final class DirectLogTransport: NSObject, WatchLogTransport, @unchecked S
         discovery?.stop()
         httpSender?.disconnect()
         wsSender?.disconnect()
+        tcpSender?.disconnect()
         connectionStatus = .disconnected
     }
 
@@ -135,6 +146,9 @@ public final class DirectLogTransport: NSObject, WatchLogTransport, @unchecked S
         case .webSocket:
             let wsPort = port + BonjourConstants.wsPortOffset
             wsSender?.connect(host: host, port: wsPort)
+        case .tcp:
+            let tcpPort = port + BonjourConstants.tcpPortOffset
+            tcpSender?.connect(host: host, port: tcpPort)
         }
     }
 
@@ -156,6 +170,16 @@ public final class DirectLogTransport: NSObject, WatchLogTransport, @unchecked S
                 }
             case .webSocket:
                 self.wsSender?.connectToEndpoint(endpoint)
+            case .tcp:
+                self.connectionStatus = .connecting
+                self.resolveEndpoint(endpoint) { host in
+                    if let host {
+                        let tcpPort = port + BonjourConstants.tcpPortOffset
+                        self.tcpSender?.connect(host: host, port: tcpPort)
+                    } else {
+                        self.connectionStatus = .disconnected
+                    }
+                }
             }
         }
         disc.start()

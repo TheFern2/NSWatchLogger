@@ -7,6 +7,7 @@ public final class LogServer: ObservableObject, @unchecked Sendable {
     private let lock = NSLock()
     private let httpListener = HTTPListener()
     private let wsListener = WebSocketListener()
+    private let tcpListener = NWTCPListener()
     private let advertiser = BonjourAdvertiser()
 
     @Published public private(set) var isRunning = false
@@ -42,24 +43,40 @@ public final class LogServer: ObservableObject, @unchecked Sendable {
             self?.removeClient(id)
         }
 
+        tcpListener.onLogReceived = { [weak self] entry in
+            self?.handleLog(entry)
+        }
+        tcpListener.onClientConnected = { [weak self] client in
+            self?.addClient(client)
+        }
+        tcpListener.onClientDisconnected = { [weak self] id in
+            self?.removeClient(id)
+        }
+
         advertiser.onStateChanged = { [weak self] advertising in
             DispatchQueue.main.async {
                 self?.isAdvertising = advertising
             }
         }
 
+        let tcpPort = port + BonjourConstants.tcpPortOffset
+
         do {
             try httpListener.start(port: port)
             try wsListener.start(port: wsPort)
+            try tcpListener.start(port: tcpPort)
         } catch {
             print("[NSWatchLoggerServer] Failed to start: \(error)")
             httpListener.stop()
             wsListener.stop()
+            tcpListener.stop()
             return
         }
 
-        if let httpNW = httpListener.nwListener, let wsNW = wsListener.nwListener {
-            advertiser.advertise(httpListener: httpNW, wsListener: wsNW)
+        if let httpNW = httpListener.nwListener,
+           let wsNW = wsListener.nwListener,
+           let tcpNW = tcpListener.nwListener {
+            advertiser.advertise(httpListener: httpNW, wsListener: wsNW, tcpListener: tcpNW)
         }
 
         DispatchQueue.main.async {
@@ -71,6 +88,7 @@ public final class LogServer: ObservableObject, @unchecked Sendable {
         advertiser.stop()
         httpListener.stop()
         wsListener.stop()
+        tcpListener.stop()
 
         DispatchQueue.main.async {
             self.isRunning = false
@@ -84,6 +102,10 @@ public final class LogServer: ObservableObject, @unchecked Sendable {
 
     public var wsPort: UInt16? {
         wsListener.nwListener?.port?.rawValue
+    }
+
+    public var tcpPort: UInt16? {
+        tcpListener.nwListener?.port?.rawValue
     }
 
     private func handleLog(_ entry: LogEntry) {

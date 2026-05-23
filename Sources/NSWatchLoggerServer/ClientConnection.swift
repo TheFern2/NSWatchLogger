@@ -3,6 +3,7 @@ import Foundation
 public enum TransportType: String, Sendable {
     case http
     case webSocket
+    case tcp
 }
 
 public struct ClientConnection: Identifiable, Sendable {
