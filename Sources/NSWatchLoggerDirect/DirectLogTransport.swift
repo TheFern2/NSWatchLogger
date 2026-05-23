@@ -23,6 +23,7 @@ public final class DirectLogTransport: NSObject, WatchLogTransport, @unchecked S
     private var wsSender: WebSocketLogSender?
     private var tcpSender: NWTCPLogSender?
     private var discovery: BonjourDiscovery?
+    private var activeResolver: BonjourResolver?
     private var _connectionStatus: ConnectionStatus = .disconnected
     private var statusHandler: ((ConnectionStatus) -> Void)?
 
@@ -187,29 +188,16 @@ public final class DirectLogTransport: NSObject, WatchLogTransport, @unchecked S
     }
 
     private func resolveEndpoint(_ endpoint: NWEndpoint, completion: @escaping (String?) -> Void) {
-        let params = NWParameters.tcp
-        let conn = NWConnection(to: endpoint, using: params)
-        conn.stateUpdateHandler = { state in
-            switch state {
-            case .ready:
-                var result: String?
-                if let resolved = conn.currentPath?.remoteEndpoint,
-                   case .hostPort(let host, _) = resolved {
-                    var hostString = "\(host)"
-                    if hostString.contains(":") {
-                        hostString = "[\(hostString)]"
-                    }
-                    result = hostString
-                }
-                conn.cancel()
-                completion(result)
-            case .failed:
-                conn.cancel()
-                completion(nil)
-            default:
-                break
-            }
+        guard case .service(let name, let type, let domain, _) = endpoint else {
+            completion(nil)
+            return
         }
-        conn.start(queue: DispatchQueue(label: "com.nswatchlogger.resolver"))
+
+        let resolver = BonjourResolver()
+        self.activeResolver = resolver
+        resolver.resolve(name: name, type: type, domain: domain) { [weak self] host in
+            self?.activeResolver = nil
+            completion(host)
+        }
     }
 }
