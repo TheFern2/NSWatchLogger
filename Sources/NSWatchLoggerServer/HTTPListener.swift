@@ -71,19 +71,43 @@ final class HTTPListener: @unchecked Sendable {
     }
 
     private func receiveRequest(_ connection: NWConnection, clientID: UUID) {
+        accumulateHTTPRequest(connection, buffer: Data(), clientID: clientID)
+    }
+
+    private func accumulateHTTPRequest(_ connection: NWConnection, buffer: Data, clientID: UUID) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
-            guard let self, let data, !data.isEmpty else {
+            guard let self else {
                 connection.cancel()
-                self?.onClientDisconnected?(clientID)
                 return
             }
 
-            self.processHTTPData(data, connection: connection, clientID: clientID)
-
-            if error != nil || isComplete {
-                connection.cancel()
-                self.onClientDisconnected?(clientID)
+            var accumulated = buffer
+            if let data, !data.isEmpty {
+                accumulated.append(data)
             }
+
+            if isHTTPRequestComplete(accumulated) {
+                self.processHTTPData(accumulated, connection: connection, clientID: clientID)
+                if isComplete || error != nil {
+                    connection.cancel()
+                    self.onClientDisconnected?(clientID)
+                }
+                return
+            }
+
+            if error != nil || isComplete || data == nil || data!.isEmpty {
+                if accumulated.isEmpty {
+                    connection.cancel()
+                    self.onClientDisconnected?(clientID)
+                } else {
+                    self.processHTTPData(accumulated, connection: connection, clientID: clientID)
+                    connection.cancel()
+                    self.onClientDisconnected?(clientID)
+                }
+                return
+            }
+
+            self.accumulateHTTPRequest(connection, buffer: accumulated, clientID: clientID)
         }
     }
 
@@ -129,6 +153,27 @@ final class HTTPListener: @unchecked Sendable {
                 sendResponse(connection, statusCode: 400, body: "Invalid JSON")
             }
         }
+    }
+
+    private func isHTTPRequestComplete(_ data: Data) -> Bool {
+        guard let headerEnd = findHeaderEnd(in: data) else { return false }
+
+        let headerData = data[data.startIndex..<headerEnd]
+        guard let headerString = String(data: headerData, encoding: .utf8) else { return false }
+
+        var contentLength = 0
+        for line in headerString.components(separatedBy: "\r\n").dropFirst() {
+            let parts = line.split(separator: ":", maxSplits: 1)
+            if parts.count == 2,
+               parts[0].trimmingCharacters(in: .whitespaces).lowercased() == "content-length",
+               let len = Int(parts[1].trimmingCharacters(in: .whitespaces)) {
+                contentLength = len
+                break
+            }
+        }
+
+        let bodyStart = headerEnd + 4
+        return data.count - bodyStart >= contentLength
     }
 
     private func sendResponse(_ connection: NWConnection, statusCode: Int, body: String) {
