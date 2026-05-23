@@ -1,19 +1,23 @@
 # NSWatchLogger
 
-A lightweight logging library for watchOS that sends structured log entries to a companion macOS viewer over the local network. Supports two transport modes: direct HTTP/WebSocket over Bonjour, and WatchConnectivity relay through the paired iPhone.
+A lightweight logging library for watchOS that sends structured log entries to a companion macOS viewer over the local network. Supports two transport paths: direct HTTP to the viewer, and WatchConnectivity relay through the paired iPhone.
 
 No external dependencies. Pure Swift.
 
-## Using with NSLogger
+## Using with NSLogger when you have a companion iOS app
 
 ![](./docs/images/nslogger.png)
+
+## Using with NSWatchLogViewer with watch only app
+
+![](./docs/images/watchlog_viewer.png)
 
 ## Products
 
 - **NSWatchLogger** — Core logger enum + transport protocol. Import on watchOS.
-- **NSWatchLoggerDirect** — Direct network transport (HTTP or WebSocket) with Bonjour discovery. Import on watchOS when sending logs directly to the macOS viewer without an iPhone relay.
-- **NSWatchLoggerModels** — Shared `LogEntry` model and Bonjour constants. Used by both client and server.
-- **NSWatchLoggerServer** — HTTP + WebSocket listener with Bonjour advertising. Used by the macOS viewer app and the CLI.
+- **NSWatchLoggerDirect** — Direct HTTP transport. Import on watchOS when sending logs directly to the macOS viewer without an iPhone relay.
+- **NSWatchLoggerModels** — Shared `LogEntry` model and constants. Used by both client and server.
+- **NSWatchLoggerServer** — HTTP listener with Bonjour advertising. Used by the macOS viewer app and the CLI.
 - **NSWatchLoggerRelay** — WatchConnectivity payload receiver + sink protocol. Import on iOS for the relay path.
 - **LogServerCLI** — Standalone command-line log server for headless use.
 
@@ -21,10 +25,10 @@ No external dependencies. Pure Swift.
 
 ```
 watchOS App                         macOS
-+--------------+    HTTP/WS     +------------------+
++--------------+      HTTP      +------------------+
 | WatchLogger  | ------------> | NSWatchLogViewer   |
-| + Direct     |   Bonjour     | (or LogServerCLI) |
-|   Transport  |   discovery   +------------------+
+| + Direct     |               | (or LogServerCLI) |
+|   Transport  |               +------------------+
 +--------------+
 
         -- or --
@@ -36,9 +40,17 @@ watchOS App        WCSession       iOS App          sink
 +--------------+              +--------------+
 ```
 
-## Direct Transport (HTTP/WebSocket)
+## watchOS Network Limitations
 
-Sends logs straight from the Watch to the macOS viewer over the local network. No iPhone needed. Best when the Watch and Mac are on the same network.
+watchOS restricts all networking below HTTP/HTTPS (raw TCP, WebSocket, Bonjour discovery) via NECP policy. Only `URLSession` HTTP requests are allowed. This means:
+
+- The server host IP must be provided explicitly (no auto-discovery)
+- WebSocket and raw TCP transports are not available on watchOS
+- The Watch and Mac must be on the same local network
+
+## Direct Transport (HTTP)
+
+Sends logs straight from the Watch to the macOS viewer over HTTP. No iPhone needed. The Watch and Mac must be on the same network.
 
 ### Watch Side
 
@@ -46,11 +58,11 @@ Sends logs straight from the Watch to the macOS viewer over the local network. N
 import NSWatchLogger
 import NSWatchLoggerDirect
 
-// Create a direct transport (auto-discovers the viewer via Bonjour)
-let transport = DirectLogTransport.create(mode: .http)
+// Create a direct transport with the viewer's IP
+let transport = DirectLogTransport.create(host: "192.168.1.50")
 
-// Or connect to a known host
-let transport = DirectLogTransport.create(mode: .http, host: "192.168.1.50", port: 9830)
+// Or specify a custom port (default is 9830)
+let transport = DirectLogTransport.create(host: "192.168.1.50", port: 9830)
 
 // Configure the logger
 WatchLogger.configure(transport: transport, enabled: true)
@@ -69,17 +81,10 @@ WatchLogger.log(.custom("rowing"), .error, "Sensor disconnected")
 
 ```swift
 transport.onConnectionStatusChanged = { status in
-    // .disconnected, .discovering, .connecting, .connected
+    // .disconnected, .connecting, .connected, .reconnecting
     print("Transport: \(status)")
 }
 ```
-
-### Transport Modes
-
-- **`.http`** — One request per log entry (or batched). Simple, works through firewalls. Default port 9830.
-- **`.webSocket`** — Persistent connection, lower overhead for high-frequency logging. Port 9831 (9830 + 1).
-
-Both modes use Bonjour (`_watchlog._tcp`) to auto-discover the viewer on the local network.
 
 ## WatchConnectivity Relay
 
@@ -167,7 +172,7 @@ Custom: `.custom("yourTag")`
 
 ## LogServerCLI
 
-A headless log server you can run from the terminal. Listens for incoming logs over HTTP and WebSocket, advertises via Bonjour, and prints entries to stdout. Useful for scripting, CI, or when you don't need the full macOS viewer.
+A headless log server you can run from the terminal. Listens for incoming logs over HTTP, advertises via Bonjour, and prints entries to stdout. Useful for scripting, CI, or when you don't need the full macOS viewer.
 
 ```bash
 # Build and run
@@ -178,7 +183,6 @@ swift run LogServerCLI
 LogServer running
   HTTP:       http://localhost:9830/log
   HTTP batch: http://localhost:9830/logs
-  WebSocket:  ws://localhost:9831
   Bonjour:    advertising as _watchlog._tcp
 
 Press Ctrl+C to stop
@@ -191,8 +195,6 @@ Output format:
 [2026-05-22T01:30:01Z] [workout] [info] Session started
 ```
 
-The Watch discovers it automatically via Bonjour, same as the macOS viewer app.
-
 ## Thread Safety
 
 `WatchLogger`, `WatchLogRelay`, `DirectLogTransport`, and `LogServer` use `NSLock` to guard mutable state. Safe to call from any thread.
@@ -201,7 +203,8 @@ The Watch discovers it automatically via Bonjour, same as the macOS viewer app.
 
 - **Transport protocol** — No WCSession dependency in the core library. The `WatchLogTransport` protocol keeps it decoupled so you can swap between direct and relay transports.
 - **Direct transport with queuing** — `DirectLogTransport` queues entries when disconnected and flushes on reconnect. No logs are lost during brief network interruptions.
-- **Bonjour discovery** — Zero-configuration. The viewer advertises `_watchlog._tcp`, the Watch finds it automatically.
+- **HTTP-only on watchOS** — watchOS NECP policy blocks all networking below HTTP/HTTPS (raw TCP, WebSocket, Bonjour discovery). The direct transport uses `URLSession` HTTP requests, the only networking API fully supported on watchOS.
+- **Explicit host required** — Bonjour discovery is blocked on watchOS, so the server IP must be provided at configure time.
 - **Client-side timestamps** — `LogEntry.timestamp` is set when `log()` is called, not when the server receives it. This gives accurate timing for performance debugging.
 - **Client-side level filtering** — Filtering happens before serialization and network send, saving battery and bandwidth on the Watch.
 - **Two separate viewer options** — `NSWatchLogViewer` (macOS app with GUI) or `LogServerCLI` (headless, for scripting and CI).
